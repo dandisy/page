@@ -2,7 +2,7 @@
 
 ### Installation
 
-    composer require dandisy/webcore-page
+    composer require dandisy/webcore-page:dev-master
 
 ### Dependency
 
