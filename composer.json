@@ -1,0 +1,21 @@
+{
+    "name": "webcore/page",
+    "description": "Page system for webcore platform",
+    "authors": [
+        {
+            "name": "dandi",
+            "email": "dandi@redbuzz.co.id"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require": {
+        "arrilot/laravel-widgets": "^3.7"
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Webcore\\Page\\PageServiceProvider"
+            ]
+        }
+    }
+}
