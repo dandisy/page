@@ -14,7 +14,7 @@
     "extra": {
         "laravel": {
             "providers": [
-                "Webcore\\Page\\PageServiceProvider"
+                "\\Webcore\\Page\\PageServiceProvider"
             ]
         }
     }
