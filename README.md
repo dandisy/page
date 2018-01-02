@@ -1,5 +1,9 @@
 ## Webcore Page System
 
+### Installation
+
+    composer require dandisy/webcore-page
+
 ### Dependency
 
     * arrilot/laravel-widgets
