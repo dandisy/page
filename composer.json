@@ -11,10 +11,15 @@
     "require": {
         "arrilot/laravel-widgets": "^3.7"
     },
+    "autoload": {
+        "psr-4": {
+            "Webcore\\Page\\": "src/"
+        }
+    },
     "extra": {
         "laravel": {
             "providers": [
-                "\\Webcore\\Page\\PageServiceProvider"
+                "Webcore\\Page\\PageServiceProvider"
             ]
         }
     }
