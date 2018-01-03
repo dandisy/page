@@ -4,6 +4,8 @@
 
     composer require dandisy/webcore-page:dev-master
 
+    php artisan vendor:publish --provider="Webcore\Page\PageServiceProvider" --tag=config
+
 ### Dependency
 
     * arrilot/laravel-widgets
