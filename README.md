@@ -14,6 +14,12 @@ if you want page system themes & components sample code run
 
     php artisan vendor:publish --provider="Webcore\Page\PageServiceProvider" --tag=assets
 
+edit your Models/Page.php in the end of class add
+
+    public function presentations() {
+        return $this->hasMany('App\Models\Presentation');
+    }
+
 ### Dependency
 
     * arrilot/laravel-widgets
