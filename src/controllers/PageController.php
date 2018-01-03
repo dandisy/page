@@ -40,13 +40,22 @@ class PageController extends Controller
 
         $menu = MenuItem::nested()->get();
 
-        $pageSource = Page::where('slug', $uri)->first();
+        $pageSource = Page::with('presentations')->where('slug', $uri)->first();
 
-        $pageContent = $pageSource ? \Widget::run('\Webcore\Page\Widgets\Page', ['pageContent' => $pageSource->description]) : NULL;
+        $items = NULL;
+        if($pageSource) {
+            $pageContent = $pageSource->description ? \Widget::run('\Webcore\Page\Widgets\Page', ['pageContent' => $pageSource->description]) : NULL;
 
-        return view('page::theme.default')
+            $items = $pageSource->toArray();
+
+            unset($items['description']);
+
+            $items['description'] = $pageContent;
+        }
+
+        return view('theme::'.$pageSource->template)
             ->with('slug', $uri)
             ->with('menu', $menu)
-            ->with('pageContent', $pageContent);
+            ->with('items', $items);
     }
 }
