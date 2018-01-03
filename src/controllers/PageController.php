@@ -53,7 +53,7 @@ class PageController extends Controller
             $items['description'] = $pageContent;
         }
 
-        return view('theme::'.$pageSource->template)
+        return view('themes::'.$pageSource->template)
             ->with('slug', $uri)
             ->with('menu', $menu)
             ->with('items', $items);
