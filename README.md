@@ -6,19 +6,17 @@
 
     php artisan vendor:publish --provider="Webcore\Page\PageServiceProvider" --tag=config
 
-if you want page system themes & components sample code run
-
-    php artisan vendor:publish --provider="Webcore\Page\PageServiceProvider" --tag=themes
-
-    php artisan vendor:publish --provider="Webcore\Page\PageServiceProvider" --tag=components
-
-    php artisan vendor:publish --provider="Webcore\Page\PageServiceProvider" --tag=assets
-
 edit your Models/Page.php in the end of class add
 
     public function presentations() {
         return $this->hasMany('App\Models\Presentation');
     }
+
+if you want page system themes & components sample code
+
+    download in https://github.com/dandisy/themes
+
+    then extract to your project root directory
 
 ### Dependency
 
