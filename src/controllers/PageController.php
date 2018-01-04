@@ -51,6 +51,8 @@ class PageController extends Controller
             unset($items['description']);
 
             $items['description'] = $pageContent;
+        } else {
+            abort(404);
         }
 
         return view('themes::'.$pageSource->template)
