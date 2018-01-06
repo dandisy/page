@@ -1,5 +1,7 @@
 ## Webcore Page System
 
+For https://github.com/dandisy/webcore
+
 ### Installation
 
     composer require dandisy/webcore-page:dev-master
