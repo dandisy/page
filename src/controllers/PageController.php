@@ -6,9 +6,19 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Page;
 use App\Models\MenuItem;
+use Illuminate\Support\Facades\DB;
+// additional
+use App\Repositories\DataQueryRepository;
 
 class PageController extends Controller
 {
+    private $relations = [];
+    private $dataAliasColumn = [];
+    private $dataEditColumn = [];
+    private $dataEditColumnRelation = [];
+    private $dataAddColumn = [];
+    private $dataFilterColumn = [];
+
     /**
      * Create a new controller instance.
      *
@@ -24,7 +34,7 @@ class PageController extends Controller
      *
      * @return \Illuminate\Http\Response
      */
-    public function index(Request $request)
+    public function index(Request $request, DataQueryRepository $dataQueryRepository)
     {
         // start slug
         $uri = null;
@@ -40,24 +50,678 @@ class PageController extends Controller
 
         $menu = MenuItem::nested()->get();
 
-        $pageSource = Page::with('presentations')->where('slug', $uri)->first();
+        $page = Page::with('presentations')
+            ->with('presentations.component')
+            ->with('presentations.component.dataSource')
+            ->with('presentations.component.dataSource.dataQuery')
+            ->with('presentations.component.dataSource.dataColumn')
+            ->where('slug', $uri)
+            ->where('status', 'publish')
+            ->first();
 
-        $items = NULL;
-        if($pageSource) {
-            $pageContent = $pageSource->description ? \Widget::run('\Webcore\Page\Widgets\Page', ['pageContent' => $pageSource->description]) : NULL;
+        $pageWithWidget = NULL;
+        if ($page) {
+            $pageContent = $page->description ? \Widget::run('\Webcore\Page\Widgets\Page', ['pageContent' => $page->description]) : NULL;
 
-            $items = $pageSource->toArray();
+            $pageWithWidget = $page->toArray();
 
-            unset($items['description']);
-
-            $items['description'] = $pageContent;
-        } else {
-            abort(404);
+            $pageWithWidget['description'] = $pageContent;
         }
 
-        return view('themes::'.$pageSource->template)
-            ->with('slug', $uri)
-            ->with('menu', $menu)
-            ->with('items', $items);
+        if(!$pageWithWidget['presentations']) {
+            //return view('themes::' . $page->template)
+            return view('themes::'.str_replace('/', '.', $page->template))
+                ->with('items', ['menu' => $menu, 'page' => $pageWithWidget]);
+        }
+
+        $presentations =  $this->getPresentations($pageWithWidget, $dataQueryRepository);
+        $presentations['menu'] = $menu;
+
+        if($presentations) {
+            //return view('vendor.themes.'.str_replace('/', '.', $page->template))
+            return view('themes::'.str_replace('/', '.', $page->template))
+                ->with('items', $presentations)
+                ->with('display', $request->display)
+                ->with('key', $request->key ? : NULL);
+        }
+
+        abort(404);
+    }
+
+    // for handling datatable
+    public function getDataTable(Request $request, DataQueryRepository $dataQueryRepository)
+    {
+        $page = Page::with('presentations')
+            ->with('presentations.component')
+            ->with('presentations.component.dataSource')
+            ->with('presentations.component.dataSource.dataQuery')
+            ->with('presentations.component.dataSource.columnAlias')
+            ->where('slug', $request->slug)
+            ->where('status', 'publish')
+            ->first();
+
+        $presentations =  $this->getPresentations($page, $dataQueryRepository);
+
+        $data = $presentations['dataTable']['model'];
+
+        if($request->filter) {
+            foreach ($request->filter as $filter) {
+                $command = $filter['command'];
+
+                if(
+                    $command === 'whereNull' ||
+                    $command === 'whereNotNull' ||
+                    $command === 'groupBy'
+                ) {
+                    $data->$command($filter['column']);
+                } else if(
+                    $command === 'whereIn' ||
+                    $command === 'whereNotIn' ||
+                    $command === 'whereBetween' ||
+                    $command === 'whereNotBetween'
+                ) {
+                    $data->$command($filter['column'], $filter['value']);
+                } else if(
+                    $command === 'whereRaw'
+                ) {
+                    $data->$command($filter['value']);
+                } else {
+                    $data->$command($filter['column'], $filter['operator'], $filter['value']);
+                }
+            }
+        }
+
+        return \Yajra\DataTables\Facades\DataTables::of($data)->make(true);
+    }
+
+    private function getPresentations($page, DataQueryRepository $dataQueryRepository, $filter = NULL) {
+        $presentations = NULL;
+
+        if($page['presentations']) {
+            $model = NULL;
+            $modelData = NULL;
+            $data = NULL;
+            $columnsUniqueData = [];
+
+            foreach($page['presentations'] as $key => $presentation) {
+                $component = $presentation['component'];
+
+                if(isset($component['dataSource'])) {
+                    $dataSource = $component['dataSource'];
+
+                    if($dataSource) {
+                        if($dataSource['model']) {
+                            $queryData = $this->getQueryData($dataSource, $dataQueryRepository, $filter);
+                            $model = $queryData['model'];
+                            if(method_exists($model, 'get')) {
+                                $modelData = $model->get();
+                            } else {
+                                $modelData = $model;
+                            }
+                            $modelColumns = $queryData['columns'];
+
+                            // collecting column alias & column edit for datatable
+                            $this->getColumnsDataTable($modelColumns, $dataSource);
+                        } else {
+                            // not working, corection for $model->connection undefined if $dataSource['model'] is false
+                            /*if(isset($dataSource['dataQuery'])) {
+                                $dataQuery = $dataSource['dataQuery'];
+                                if(isset($dataQuery[0]['command'])) {
+                                    if($dataQuery[0]['command'] === 'raw') {
+                                        $modelData = DB::connection($model->connection ? : 'mysql')->select(
+                                            DB::raw(trim(preg_replace('/\s+/', ' ', $dataQuery[0]['value'])))
+                                        );
+                                    }
+                                }
+                            }*/
+                        }
+                    }
+                }
+
+                $data[$presentation['component_id']] = $modelData;
+            }
+
+            // get unique columns data for datatable column filter dropdown
+            // note : for now only support one datatable in a page
+            foreach(array_column($this->dataAliasColumn, 'title') as $item) {
+                $columnsUniqueData[$item] = array_unique(array_column($modelData->toArray(), $item));
+            }
+
+            $dataTable = [
+                'model' => $model,
+                'columns' => $this->dataAliasColumn,
+                'editColumns' => $this->dataEditColumn,
+                'editColumnsRelation' => $this->dataEditColumnRelation,
+                'addColumns' => $this->dataAddColumn,
+                'columnsUniqueData' => $columnsUniqueData
+            ];
+
+            $presentations = [
+                'data' => collect($data),
+                'dataTable' => collect($dataTable),
+                'page' => collect($page)
+            ];
+        }
+
+        return collect($presentations);
+    }
+
+    private function getQueryData($dataSource, DataQueryRepository $dataQueryRepository, $filter = NULL) {
+        $columns = [];
+        $hasSubQuery = NULL;
+        $asSubQuery = NULL;
+
+        $modelFQNS = 'App\Models\Remote\\'.str_replace('/', '\\', $dataSource['model']);
+
+        $data = new $modelFQNS();
+
+        $dataQuery = $filter ? : $dataSource['dataQuery'];
+
+        foreach($dataQuery as $query) {
+            if(array_key_exists('id', $query)) {
+                $id = $query['id'];
+                $hasSubQuery = $dataQueryRepository->findWhere(['parent' => $id]);
+            }
+            if(array_key_exists('parent', $query)) {
+                $asSubQuery = $query['parent'];
+            }
+
+            $command = $query['command'];
+
+            if (
+                $command === 'first' ||
+                $command === 'count' ||
+                $command === 'latest' ||
+                $command === 'distinct' ||
+                $command === 'inRandomOrder'
+            ) {
+                $data = $data->$command();
+            } else if(
+                $command === 'select' ||
+                $command === 'addSelect' ||
+                $command === 'groupBy' ||
+                $command === 'whereNull' ||
+                $command === 'whereNotNull' ||
+                $command === 'sum' ||
+                $command === 'avg' ||
+                $command === 'max' ||
+                $command === 'min'
+            ) {
+                // for relevant command as sub query, don't process command, sub query command will be handle separately
+                if(!$asSubQuery) {
+                    if (isset($query['column'])) {
+                        $columns = explode(',', $query['column']);
+                    }
+
+                    if (empty($query['column']) && $command === 'select') {
+                        // get all column name from selected model
+                        $columns = $this->getColumnsName($dataSource['model']);
+                    }
+
+                    if($command === 'select') {
+                        $columnsAlias = array_pluck($dataSource['columnAlias'], 'alias', 'name');
+
+                        $columnsSelect = array_map(function ($value) use ($columnsAlias) {
+                            if (isset($columnsAlias[$value])) {
+                                if ($columnsAlias[$value]) {
+                                    return $value . ' AS ' . $columnsAlias[$value];
+                                }
+                            }
+
+                            return $value;
+                        }, $columns);
+                    } else {
+                        $columnsSelect = $columns;
+                    }
+
+                    $data = $data->$command($columnsSelect);
+                }
+            } else if(
+                $command === 'where' ||
+                $command === 'orWhere' ||
+                $command === 'whereDate' ||
+                $command === 'whereMonth' ||
+                $command === 'whereDay' ||
+                $command === 'whereYear' ||
+                $command === 'whereTime' ||
+                $command === 'whereColumn' ||
+                $command === 'having'
+            ) {
+                // for relevant command as sub query, don't process command, sub query command will be handle separately
+                if(!$asSubQuery) {
+                    $data = $data->$command(
+                        $query['column'],
+                        $query['operator'],
+                        $query['value']
+                    );
+                }
+            } else if($command === 'orderBy') {
+                // for relevant command as sub query, don't process command, sub query command will be handle separately
+                if(!$asSubQuery) {
+                    if($query['value']) {
+                        $data = $data->$command($query['column'], $query['value']);
+                    } else {
+                        $data = $data->$command($query['column']);
+                    }
+                }
+            } else if(
+                $command === 'whereIn' ||
+                $command === 'whereNotIn' ||
+                $command === 'whereBetween' ||
+                $command === 'whereNotBetween'
+            ) {
+                // for relevant command as sub query, don't process command, sub query command will be handle separately
+                if(!$asSubQuery) {
+                    $value = explode(',', $query['value']);
+
+                    $data = $data->$command($query['column'], $value);
+                }
+            } else if(
+                $command === 'from' ||
+                $command === 'offset' ||
+                $command === 'limit' ||
+                $command === 'whereRaw' ||
+                $command === 'orWhereRaw' ||
+                $command === 'orderByRaw' ||
+                $command === 'havingRaw'
+            ) {
+                // for relevant command as sub query, don't process command, sub query command will be handle separately
+                if(!$asSubQuery) {
+                    $data = $data->$command($query['value']);
+                }
+            } else if($command === 'selectRaw') {
+                // for relevant command as sub query, don't process command, sub query command will be handle separately
+                if(!$asSubQuery) {
+                    $data = $data->$command($query['value']);
+
+                    // preparing add column on datatable
+                    $addition = explode(',', $query['value']);
+
+                    foreach ($addition as $item) {
+                        // if using AS (column alias)
+                        $addItem = explode(' ', $item);
+
+                        if(isset($addItem[2])) {
+                            $this->dataAddColumn[$addItem[2]] = $addItem[0];
+                        } else {
+                            $this->dataAddColumn[$addItem[0]] = $addItem[0];
+                        }
+                    }
+                }
+            } else if($command === 'with') {
+                // for relevant command as sub query, don't process command, sub query command will be handle separately
+                if(!$asSubQuery) {
+                    if (!$hasSubQuery) {
+                        $data = $data->$command($query['value']);
+                    } else {
+                        // handling sub query of with command
+                        $data = $data->$command($query['value'], function ($query) use ($hasSubQuery) {
+                            foreach ($hasSubQuery as $sub) {
+                                $subCommand = $sub['command'];
+
+                                if (
+                                    $subCommand === 'latest' ||
+                                    $subCommand === 'count'
+                                ) {
+                                    $query = $query->$subCommand();
+                                } else if (
+                                    $subCommand === 'select' ||
+                                    $subCommand === 'addSelect' ||
+                                    $subCommand === 'groupBy' ||
+                                    $subCommand === 'whereNull' ||
+                                    $subCommand === 'whereNotNull' ||
+                                    $subCommand === 'sum' ||
+                                    $subCommand === 'avg' ||
+                                    $subCommand === 'max' ||
+                                    $subCommand === 'min'
+                                ) {
+                                    $query = $query->$subCommand($sub['column']);
+                                } else if (
+                                    $subCommand === 'on' ||
+                                    $subCommand === 'orOn' ||
+                                    $subCommand === 'where' ||
+                                    $subCommand === 'orWhere' ||
+                                    $subCommand === 'whereDate' ||
+                                    $subCommand === 'whereMonth' ||
+                                    $subCommand === 'whereDay' ||
+                                    $subCommand === 'whereYear' ||
+                                    $subCommand === 'whereTime' ||
+                                    $subCommand === 'whereColumn' ||
+                                    $subCommand === 'having'
+                                ) {
+                                    $query = $query->$subCommand($sub['column'], $sub['operator'], $sub['value']);
+                                } else if (
+                                    $subCommand === 'whereIn' ||
+                                    $subCommand === 'whereNotIn' ||
+                                    $subCommand === 'whereBetween' ||
+                                    $subCommand === 'whereNotBetween'
+                                ) {
+                                    $query = $query->$subCommand($sub['column'], $sub['value']);
+                                } else if (
+                                    $subCommand === 'whereRaw' ||
+                                    $subCommand === 'orWhereRaw'
+                                ) {
+                                    $query = $query->$subCommand($sub['value']);
+                                }
+                            }
+                        });
+                    }
+                }
+            } else if($command === 'join' || $command === 'leftJoin') {
+                // for relevant command as sub query, don't process command, sub query command will be handle separately
+                if(!$asSubQuery) {
+                    $value = explode(',', $query['value']);
+                    $joinModule = explode('/', $value[0]);
+                    $joinModelNS = $joinModule[0];
+                    if(stristr($joinModule[1], ' AS ')) {
+                        // if using AS (table alias)
+                        $joinNM = explode(' ', $joinModule[1]);
+
+                        $joinModelName = $joinNM[0];
+                    } else {
+                        $joinModelName = $joinModule[1];
+                    }
+                    $JoinModelFQNS = 'App\Models\Remote\\' . $joinModelNS . '\\' . $joinModelName;
+
+                    $joinModel = new $JoinModelFQNS();
+
+                    $joinTable = $joinModel->table;
+
+                    if (isset($value[3])) {
+                        $tableAlias = $value[3];
+
+                        $joinTable .= ' AS ' . $tableAlias;
+                    }
+                    if(isset($joinNM[2])) {
+                        $tableAlias = $joinNM[2];
+
+                        $joinTable .= ' AS ' . $tableAlias;
+                    }
+
+                    if (!$hasSubQuery) {
+                        $data = $data->$command($joinTable, $value[1], '=', $value[2]);
+                    } else {
+                        // handling sub query of join and leftJoin command
+                        $data = $data->$command($joinTable, function ($query) use ($hasSubQuery, $value) {
+                            $query = $query->on($value[1], '=', $value[2]);
+
+                            foreach ($hasSubQuery as $sub) {
+                                $subCommand = $sub['command'];
+
+                                if(
+                                    $subCommand === 'latest' ||
+                                    $subCommand === 'count'
+                                ) {
+                                    $query = $query->$subCommand();
+                                } else if (
+                                    $subCommand === 'select' ||
+                                    $subCommand === 'addSelect' ||
+                                    $subCommand === 'groupBy' ||
+                                    $subCommand === 'whereNull' ||
+                                    $subCommand === 'whereNotNull' ||
+                                    $subCommand === 'sum' ||
+                                    $subCommand === 'avg' ||
+                                    $subCommand === 'max' ||
+                                    $subCommand === 'min'
+                                ) {
+                                    $query = $query->$subCommand($sub['column']);
+                                } else if (
+                                    $subCommand === 'where' ||
+                                    $subCommand === 'orWhere' ||
+                                    $subCommand === 'whereDate' ||
+                                    $subCommand === 'whereMonth' ||
+                                    $subCommand === 'whereDay' ||
+                                    $subCommand === 'whereYear' ||
+                                    $subCommand === 'whereTime' ||
+                                    $subCommand === 'whereColumn' ||
+                                    $subCommand === 'having'
+                                ) {
+                                    $query = $query->$subCommand($sub['column'], $sub['operator'], $sub['value']);
+                                } else if (
+                                    $subCommand === 'whereIn' ||
+                                    $subCommand === 'whereNotIn' ||
+                                    $subCommand === 'whereBetween' ||
+                                    $subCommand === 'whereNotBetween'
+                                ) {
+                                    $query = $query->$subCommand($sub['column'], $sub['value']);
+                                } else if (
+                                    $subCommand === 'whereRaw' ||
+                                    $subCommand === 'orWhereRaw'
+                                ) {
+                                    $query = $query->$subCommand($sub['value']);
+                                }
+                            }
+                        });
+                    }
+                    // end handling sub query of join and leftJoin command
+
+                    // preparing to get all column name of join table
+                    array_push($this->relations, $query['value']);
+                }
+            } else if($command === 'raw') {
+                // for relevant command as sub query, don't process command, sub query command will be handle separately
+                if(!$asSubQuery) {
+                    $data = DB::connection($data->connection ?: 'mysql')->select(
+                        DB::raw(trim(preg_replace('/\s+/', ' ', $query['value'])))
+                    );
+                }
+            }
+        }
+
+        return [
+            'columns' => $columns,
+            'model' => $data
+        ];
+    }
+
+    private function getColumnsName($moduleName) {
+        $module = explode('/', $moduleName);
+
+        // get all column name from selected model
+        $modelNS = $module[0];
+        $modelName = $module[1];
+        $modelFQNS = 'App\Models\Remote\\'.$modelNS.'\\'.$modelName;
+
+        $model = new $modelFQNS();
+
+        if($modelNS === 'ADDON') {
+            $columns = $model->getTableColumns();
+        } else {
+            $db = $model->connection;
+
+            $columns = DB::connection($db)->select(
+                DB::raw("SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = N'".$model->table."'")
+            );
+
+            $columns = array_column($columns, 'COLUMN_NAME');
+        }
+        // end get all column name from selected model
+
+        // get all column name of join table
+        if($this->relations) {
+            $columns = array_map(function($value) use ($model) {
+                return $model->table.'.'.$value;
+            }, $columns);
+
+            foreach($this->relations as $val) {
+                $value = explode(',', $val);
+                $joinModule = explode('/', $value[0]);
+                $joinNS = $joinModule[0];
+                $joinModelName = $joinModule[1];
+                $JoinModelFQNS = 'App\Models\Remote\\'.$joinNS.'\\'.$joinModelName;
+
+                $joinModel = new $JoinModelFQNS();
+
+                if($joinNS === 'ADDON') {
+                    $joinColumns = $joinModel->getTableColumns();
+                } else {
+                    $joinDb = $joinModel->connection;
+
+                    $joinColumns = DB::connection($joinDb)->select(
+                        DB::raw("SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = N'".$joinModel->table."'")
+                    );
+
+                    $joinColumns = array_column($joinColumns, 'COLUMN_NAME');
+                }
+
+                $joinColumns = array_map(function($value) use ($joinModel) {
+                    return $joinModel->table.'.'.$value;
+                }, $joinColumns);
+
+                $columns = array_merge($columns, $joinColumns);
+            }
+        }
+        // end get all column name of join table
+
+        return $columns;
+    }
+
+    private function getColumnsDataTable($columns, $dataSource) {
+        if($columns) {
+            // collecting column alias & column edit for datatable
+            $alias = $dataSource['columnAlias']->pluck('alias', 'name')->toArray();
+            $edit = $dataSource['columnAlias']->pluck('edit', 'name')->toArray();
+
+            //dd($edit);
+
+            foreach ($columns as $value) {
+                if (strpos($value, '.')) {
+                    $columnName = trim(substr($value, strrpos($value, '.') + 1));
+                    if (array_key_exists($value, $alias)) {
+                        if ($alias[$value]) {
+                            $this->dataAliasColumn[$alias[$value]] = [
+                                'data' => $alias[$value],
+                                'name' => $alias[$value],
+                                'title' => $alias[$value]
+                            ];
+                        } else {
+                            $this->dataAliasColumn[$value] = [
+                                'data' => $columnName,
+                                'name' => $value,
+                                'title' => $columnName
+                            ];
+                        }
+                    }
+                } else {
+                    if (array_key_exists($value, $alias)) {
+                        if ($alias[$value]) {
+                            $this->dataAliasColumn[$alias[$value]] = [
+                                'data' => $alias[$value],
+                                'name' => $alias[$value],
+                                'title' => $alias[$value]
+                            ];
+                        } else {
+                            array_push($this->dataAliasColumn, $value);
+                        }
+                    } else {
+                        array_push($this->dataAliasColumn, $value);
+                    }
+                }
+
+                /*if(array_key_exists($value, $edit)) {
+                    if($edit[$value] && $edit[$value] != 'null') {
+                        if(!array_search($edit[$value], $dataAliasColumn)) {
+                            $this->dataEditColumn[$columnName] = $edit[$value];
+                        } else {
+                            // $this->dataAddColumn[$columnName] = $edit[$value];
+                        }
+                    }
+                }*/
+            }
+            // end collecting column alias & column edit for datatable
+
+            // collecting additional column for datatable
+            if ($this->dataAddColumn) {
+                foreach ($this->dataAddColumn as $key => $item) {
+                    $this->dataAliasColumn[$key] = ['data' => $key, 'name' => $item, 'title' => $key];
+                }
+            }
+
+            // collecting edit column for datatable
+            foreach ($edit as $key => $item) {
+                /*if(strpos($key, '.')) {
+                    $columnName = trim(substr($key, strrpos($key, '.') + 1));
+                } else {*/
+                $columnName = $key;
+                //}
+
+                if (!array_key_exists($item, $this->dataAliasColumn) && $item && $item != 'null') {
+                    $this->dataEditColumn[isset($alias[$columnName]) ? $alias[$columnName] : $columnName] = $item;
+                } else if (array_key_exists($item, $this->dataAliasColumn)) {
+                    $this->dataEditColumnRelation[$item] = $key;
+
+                    $this->dataAliasColumn[$item]['name'] = $key;
+                }
+            }
+        } else {
+            // get all columns name and alias if no select command
+            // get all column name from selected model
+            $module = explode('/', $dataSource['model']);
+            $modelNS = $module[0];
+            $modelName = $module[1];
+            $modelFQNS = 'App\Models\Remote\\' . $modelNS . '\\' . $modelName;
+
+            $model = new $modelFQNS();
+
+            if ($modelNS === 'ADDON') {
+                $columns = $model->getTableColumns();
+            } else {
+                $db = $model->connection;
+
+                $columns = DB::connection($db)->select(
+                    DB::raw("SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = N'" . $model->table . "'")
+                );
+
+                $columns = array_column($columns, 'COLUMN_NAME');
+            }
+            // end all column name from selected model
+
+            // get all column name of join table
+            if ($this->relations) {
+                $columns = array_map(function ($value) use ($model) {
+                    return $model->table . '.' . $value;
+                }, $columns);
+
+                foreach ($this->relations as $val) {
+                    $value = explode(',', $val);
+                    $joinModule = explode('/', $value[0]);
+                    $joinNS = $joinModule[0];
+                    $joinModelName = $joinModule[1];
+                    $JoinModelFQNS = 'App\Models\Remote\\' . $joinNS . '\\' . $joinModelName;
+
+                    $joinModel = new $JoinModelFQNS();
+
+                    if ($joinNS === 'ADDON') {
+                        $joinColumns = $joinModel->getTableColumns();
+                    } else {
+                        $joinDb = $joinModel->connection;
+
+                        $joinColumns = DB::connection($joinDb)->select(
+                            DB::raw("SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = N'" . $joinModel->table . "'")
+                        );
+
+                        $joinColumns = array_column($joinColumns, 'COLUMN_NAME');
+                    }
+
+                    $joinColumns = array_map(function ($value) use ($joinModel) {
+                        return $joinModel->table . '.' . $value;
+                    }, $joinColumns);
+
+                    $columns = array_merge($columns, $joinColumns);
+                }
+            }
+            // end get all column name of join table
+            // end get all columns name and alias if no select command
+
+            foreach ($columns as $value) {
+                if (strpos($value, '.')) {
+                    $columnName = trim(substr($value, strrpos($value, '.') + 1));
+
+                    array_push($this->dataAliasColumn, $columnName);
+                } else {
+                    array_push($this->dataAliasColumn, $value);
+                }
+            }
+        }
     }
 }
