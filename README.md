@@ -1,4 +1,4 @@
-## Webcore Page System
+## Webcore Front Page System
 
 For https://github.com/dandisy/webcore
 
@@ -14,7 +14,7 @@ edit your Models/Page.php in the end of class add
         return $this->hasMany('App\Models\Presentation');
     }
 
-if you want page system themes & components sample code
+if you want front page system themes & components sample code
 
     download in https://github.com/dandisy/themes
 
