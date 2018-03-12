@@ -53,8 +53,8 @@ class PageController extends Controller
         $page = Page::with('presentations')
             ->with('presentations.component')
             ->with('presentations.component.dataSource')
-            ->with('presentations.component.dataSource.dataQuery')
-            ->with('presentations.component.dataSource.dataColumn')
+            ->with('presentations.component.dataSource.dataQueries')
+            ->with('presentations.component.dataSource.dataColumns')
             ->where('slug', $uri)
             ->where('status', 'publish')
             ->first();
@@ -88,52 +88,6 @@ class PageController extends Controller
         abort(404);
     }
 
-    // for handling datatable
-    public function getDataTable(Request $request, DataQueryRepository $dataQueryRepository)
-    {
-        $page = Page::with('presentations')
-            ->with('presentations.component')
-            ->with('presentations.component.dataSource')
-            ->with('presentations.component.dataSource.dataQuery')
-            ->with('presentations.component.dataSource.columnAlias')
-            ->where('slug', $request->slug)
-            ->where('status', 'publish')
-            ->first();
-
-        $presentations =  $this->getPresentations($page, $dataQueryRepository);
-
-        $data = $presentations['dataTable']['model'];
-
-        if($request->filter) {
-            foreach ($request->filter as $filter) {
-                $command = $filter['command'];
-
-                if(
-                    $command === 'whereNull' ||
-                    $command === 'whereNotNull' ||
-                    $command === 'groupBy'
-                ) {
-                    $data->$command($filter['column']);
-                } else if(
-                    $command === 'whereIn' ||
-                    $command === 'whereNotIn' ||
-                    $command === 'whereBetween' ||
-                    $command === 'whereNotBetween'
-                ) {
-                    $data->$command($filter['column'], $filter['value']);
-                } else if(
-                    $command === 'whereRaw'
-                ) {
-                    $data->$command($filter['value']);
-                } else {
-                    $data->$command($filter['column'], $filter['operator'], $filter['value']);
-                }
-            }
-        }
-
-        return \Yajra\DataTables\Facades\DataTables::of($data)->make(true);
-    }
-
     private function getPresentations($page, DataQueryRepository $dataQueryRepository, $filter = NULL) {
         $presentations = NULL;
 
@@ -146,18 +100,18 @@ class PageController extends Controller
             foreach($page['presentations'] as $key => $presentation) {
                 $component = $presentation['component'];
 
-                if(isset($component['dataSource'])) {
-                    $dataSource = $component['dataSource'];
+                if(isset($component['data_source'])) {
+                    $dataSource = $component['data_source'];
 
                     if($dataSource) {
                         if($dataSource['model']) {
                             $queryData = $this->getQueryData($dataSource, $dataQueryRepository, $filter);
                             $model = $queryData['model'];
-                            if(method_exists($model, 'get')) {
+//                            if(method_exists($model, 'get')) {
                                 $modelData = $model->get();
-                            } else {
-                                $modelData = $model;
-                            }
+//                            } else {
+//                                $modelData = $model;
+//                            }
                             $modelColumns = $queryData['columns'];
 
                             // collecting column alias & column edit for datatable
@@ -165,11 +119,11 @@ class PageController extends Controller
                         } else {
                             // not working, corection for $model->connection undefined if $dataSource['model'] is false
                             /*if(isset($dataSource['dataQuery'])) {
-                                $dataQuery = $dataSource['dataQuery'];
-                                if(isset($dataQuery[0]['command'])) {
-                                    if($dataQuery[0]['command'] === 'raw') {
+                                $dataQueries = $dataSource['dataQueries'];
+                                if(isset($dataQueries[0]['command'])) {
+                                    if($dataQueries[0]['command'] === 'raw') {
                                         $modelData = DB::connection($model->connection ? : 'mysql')->select(
-                                            DB::raw(trim(preg_replace('/\s+/', ' ', $dataQuery[0]['value'])))
+                                            DB::raw(trim(preg_replace('/\s+/', ' ', $dataQueries[0]['value'])))
                                         );
                                     }
                                 }
@@ -211,11 +165,11 @@ class PageController extends Controller
         $hasSubQuery = NULL;
         $asSubQuery = NULL;
 
-        $modelFQNS = 'App\Models\Remote\\'.str_replace('/', '\\', $dataSource['model']);
+        $modelFQNS = 'App\Models\\'.$dataSource['model'];
 
         $data = new $modelFQNS();
 
-        $dataQuery = $filter ? : $dataSource['dataQuery'];
+        $dataQuery = $filter ? : $dataSource['data_queries'];
 
         foreach($dataQuery as $query) {
             if(array_key_exists('id', $query)) {
@@ -259,7 +213,7 @@ class PageController extends Controller
                     }
 
                     if($command === 'select') {
-                        $columnsAlias = array_pluck($dataSource['columnAlias'], 'alias', 'name');
+                        $columnsAlias = array_pluck($dataSource['data_columns'], 'alias', 'name');
 
                         $columnsSelect = array_map(function ($value) use ($columnsAlias) {
                             if (isset($columnsAlias[$value])) {
@@ -411,17 +365,15 @@ class PageController extends Controller
                 // for relevant command as sub query, don't process command, sub query command will be handle separately
                 if(!$asSubQuery) {
                     $value = explode(',', $query['value']);
-                    $joinModule = explode('/', $value[0]);
-                    $joinModelNS = $joinModule[0];
-                    if(stristr($joinModule[1], ' AS ')) {
+                    if(stristr($value[0], ' AS ')) {
                         // if using AS (table alias)
                         $joinNM = explode(' ', $joinModule[1]);
 
                         $joinModelName = $joinNM[0];
                     } else {
-                        $joinModelName = $joinModule[1];
+                        $joinModelName = $value[0];
                     }
-                    $JoinModelFQNS = 'App\Models\Remote\\' . $joinModelNS . '\\' . $joinModelName;
+                    $JoinModelFQNS = 'App\Models\\'.$joinModelName;
 
                     $joinModel = new $JoinModelFQNS();
 
@@ -514,27 +466,14 @@ class PageController extends Controller
         ];
     }
 
-    private function getColumnsName($moduleName) {
-        $module = explode('/', $moduleName);
+    private function getColumnsName($modelName) {
 
         // get all column name from selected model
-        $modelNS = $module[0];
-        $modelName = $module[1];
-        $modelFQNS = 'App\Models\Remote\\'.$modelNS.'\\'.$modelName;
+        $modelFQNS = 'App\Models\\'.$modelName;
 
         $model = new $modelFQNS();
 
-        if($modelNS === 'ADDON') {
-            $columns = $model->getTableColumns();
-        } else {
-            $db = $model->connection;
-
-            $columns = DB::connection($db)->select(
-                DB::raw("SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = N'".$model->table."'")
-            );
-
-            $columns = array_column($columns, 'COLUMN_NAME');
-        }
+        $columns = $model->getTableColumns();
         // end get all column name from selected model
 
         // get all column name of join table
@@ -545,24 +484,12 @@ class PageController extends Controller
 
             foreach($this->relations as $val) {
                 $value = explode(',', $val);
-                $joinModule = explode('/', $value[0]);
-                $joinNS = $joinModule[0];
-                $joinModelName = $joinModule[1];
-                $JoinModelFQNS = 'App\Models\Remote\\'.$joinNS.'\\'.$joinModelName;
+                $joinModelName = $value[0];
+                $JoinModelFQNS = 'App\Models\\'.$joinModelName;
 
                 $joinModel = new $JoinModelFQNS();
 
-                if($joinNS === 'ADDON') {
-                    $joinColumns = $joinModel->getTableColumns();
-                } else {
-                    $joinDb = $joinModel->connection;
-
-                    $joinColumns = DB::connection($joinDb)->select(
-                        DB::raw("SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = N'".$joinModel->table."'")
-                    );
-
-                    $joinColumns = array_column($joinColumns, 'COLUMN_NAME');
-                }
+                $joinColumns = $joinModel->getTableColumns();
 
                 $joinColumns = array_map(function($value) use ($joinModel) {
                     return $joinModel->table.'.'.$value;
@@ -579,10 +506,8 @@ class PageController extends Controller
     private function getColumnsDataTable($columns, $dataSource) {
         if($columns) {
             // collecting column alias & column edit for datatable
-            $alias = $dataSource['columnAlias']->pluck('alias', 'name')->toArray();
-            $edit = $dataSource['columnAlias']->pluck('edit', 'name')->toArray();
-
-            //dd($edit);
+            $alias = $dataSource['data _columns']->pluck('alias', 'name')->toArray();
+            $edit = $dataSource['data_columns']->pluck('edit', 'name')->toArray();
 
             foreach ($columns as $value) {
                 if (strpos($value, '.')) {
@@ -656,24 +581,11 @@ class PageController extends Controller
         } else {
             // get all columns name and alias if no select command
             // get all column name from selected model
-            $module = explode('/', $dataSource['model']);
-            $modelNS = $module[0];
-            $modelName = $module[1];
-            $modelFQNS = 'App\Models\Remote\\' . $modelNS . '\\' . $modelName;
+            $modelFQNS = 'App\Models\\'.$dataSource['model'];
 
             $model = new $modelFQNS();
 
-            if ($modelNS === 'ADDON') {
-                $columns = $model->getTableColumns();
-            } else {
-                $db = $model->connection;
-
-                $columns = DB::connection($db)->select(
-                    DB::raw("SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = N'" . $model->table . "'")
-                );
-
-                $columns = array_column($columns, 'COLUMN_NAME');
-            }
+            $columns = $model->getTableColumns();
             // end all column name from selected model
 
             // get all column name of join table
@@ -684,24 +596,12 @@ class PageController extends Controller
 
                 foreach ($this->relations as $val) {
                     $value = explode(',', $val);
-                    $joinModule = explode('/', $value[0]);
-                    $joinNS = $joinModule[0];
-                    $joinModelName = $joinModule[1];
-                    $JoinModelFQNS = 'App\Models\Remote\\' . $joinNS . '\\' . $joinModelName;
+                    $joinModelName = $value[0];
+                    $JoinModelFQNS = 'App\Models\\'.$joinModelName;
 
                     $joinModel = new $JoinModelFQNS();
 
-                    if ($joinNS === 'ADDON') {
-                        $joinColumns = $joinModel->getTableColumns();
-                    } else {
-                        $joinDb = $joinModel->connection;
-
-                        $joinColumns = DB::connection($joinDb)->select(
-                            DB::raw("SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = N'" . $joinModel->table . "'")
-                        );
-
-                        $joinColumns = array_column($joinColumns, 'COLUMN_NAME');
-                    }
+                    $joinColumns = $joinModel->getTableColumns();
 
                     $joinColumns = array_map(function ($value) use ($joinModel) {
                         return $joinModel->table . '.' . $value;
@@ -723,5 +623,51 @@ class PageController extends Controller
                 }
             }
         }
+    }
+
+    // for handling datatable
+    public function getDataTable(Request $request, DataQueryRepository $dataQueryRepository)
+    {
+        $page = Page::with('presentations')
+            ->with('presentations.component')
+            ->with('presentations.component.dataSource')
+            ->with('presentations.component.dataSource.dataQueries')
+            ->with('presentations.component.dataSource.dataColumns')
+            ->where('slug', $request->slug)
+            ->where('status', 'publish')
+            ->first();
+
+        $presentations =  $this->getPresentations($page, $dataQueryRepository);
+
+        $data = $presentations['dataTable']['model'];
+
+        if($request->filter) {
+            foreach ($request->filter as $filter) {
+                $command = $filter['command'];
+
+                if(
+                    $command === 'whereNull' ||
+                    $command === 'whereNotNull' ||
+                    $command === 'groupBy'
+                ) {
+                    $data->$command($filter['column']);
+                } else if(
+                    $command === 'whereIn' ||
+                    $command === 'whereNotIn' ||
+                    $command === 'whereBetween' ||
+                    $command === 'whereNotBetween'
+                ) {
+                    $data->$command($filter['column'], $filter['value']);
+                } else if(
+                    $command === 'whereRaw'
+                ) {
+                    $data->$command($filter['value']);
+                } else {
+                    $data->$command($filter['column'], $filter['operator'], $filter['value']);
+                }
+            }
+        }
+
+        return \Yajra\DataTables\Facades\DataTables::of($data)->make(true);
     }
 }
