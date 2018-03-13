@@ -66,23 +66,23 @@ class PageController extends Controller
             $pageWithWidget = $page->toArray();
 
             $pageWithWidget['description'] = $pageContent;
-        }
 
-        if(!$pageWithWidget['presentations']) {
-            //return view('themes::' . $page->template)
-            return view('themes::'.str_replace('/', '.', $page->template))
-                ->with('items', ['menu' => $menu, 'page' => $pageWithWidget]);
-        }
+            if(!$pageWithWidget['presentations']) {
+                //return view('themes::' . $page->template)
+                return view('themes::'.str_replace('/', '.', $page->template))
+                    ->with('items', ['menu' => $menu, 'page' => $pageWithWidget]);
+            }
 
-        $presentations =  $this->getPresentations($pageWithWidget, $dataQueryRepository);
-        $presentations['menu'] = $menu;
-
-        if($presentations) {
-            //return view('vendor.themes.'.str_replace('/', '.', $page->template))
-            return view('themes::'.str_replace('/', '.', $page->template))
-                ->with('items', $presentations)
-                ->with('display', $request->display)
-                ->with('key', $request->key ? : NULL);
+            $presentations =  $this->getPresentations($pageWithWidget, $dataQueryRepository);
+            $presentations['menu'] = $menu;
+    
+            if($presentations) {
+                //return view('vendor.themes.'.str_replace('/', '.', $page->template))
+                return view('themes::'.str_replace('/', '.', $page->template))
+                    ->with('items', $presentations)
+                    ->with('display', $request->display)
+                    ->with('key', $request->key ? : NULL);
+            }
         }
 
         abort(404);
