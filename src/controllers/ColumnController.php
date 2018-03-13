@@ -31,7 +31,12 @@ class ColumnController extends Controller
             return [];
         }
 
-        $modelName = $request->model;
+        if(stristr($request->model, '/')) {
+            $modelName = str_replace('/', '\\', $request->model);
+        } else {
+            $modelName = $request->model;
+        }
+
         $modelFQNS = 'App\Models\\'.$modelName;
 
         $model = new $modelFQNS();
@@ -45,7 +50,26 @@ class ColumnController extends Controller
     
             foreach($request->joinModel as $item) {
                 $items = explode(',', $item);
-                $joinModelName = $items[0];
+
+                if(stristr($items[0], '/')) {
+                    $joinModule = explode('/', $items[0]);
+                    $joinModelNS = $joinModule[0];
+                    $joinModelName = $joinModule[1];
+                } else {
+                    $joinModelName = $items[0];
+                }
+
+                if(stristr($joinModelName, ' AS ')) {
+                    // if using AS (table alias)
+                    $joinNM = explode(' ', $joinModelName);
+
+                    $joinModelName = $joinNM[0];
+                }
+
+                if(isset($joinModelNS)) {
+                    $joinModelName = $joinModelNS.'\\'.$joinModelName;
+                }
+
                 $joinModelFQNS = 'App\Models\\'.$joinModelName;
 
                 $joinModel = new $joinModelFQNS();
@@ -53,6 +77,10 @@ class ColumnController extends Controller
                 $joinColumns = $joinModel->getTableColumns();
     
                 $joinColumns = array_map(function($value) use ($joinModel, $items) {
+                    if(isset($joinNM[2])) {
+                        return $joinNM[2].'.'.$value;
+                    }
+
                     if(isset($items[3])) {
                         return $items[3].'.'.$value;
                     }

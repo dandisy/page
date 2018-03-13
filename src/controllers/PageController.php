@@ -165,7 +165,13 @@ class PageController extends Controller
         $hasSubQuery = NULL;
         $asSubQuery = NULL;
 
-        $modelFQNS = 'App\Models\\'.$dataSource['model'];
+        if(stristr($dataSource['model'], '/')) {
+            $modelName = str_replace('/', '\\', $dataSource['model']);
+        } else {
+            $modelName = $dataSource['model'];
+        }
+
+        $modelFQNS = 'App\Models\\'.$modelName;
 
         $data = new $modelFQNS();
 
@@ -365,27 +371,40 @@ class PageController extends Controller
                 // for relevant command as sub query, don't process command, sub query command will be handle separately
                 if(!$asSubQuery) {
                     $value = explode(',', $query['value']);
-                    if(stristr($value[0], ' AS ')) {
-                        // if using AS (table alias)
-                        $joinNM = explode(' ', $joinModule[1]);
 
-                        $joinModelName = $joinNM[0];
+                    if(stristr($value[0], '/')) {
+                        $joinModule = explode('/', $value[0]);
+                        $joinModelNS = $joinModule[0];
+                        $joinModelName = $joinModule[1];
                     } else {
                         $joinModelName = $value[0];
                     }
+
+                    if(stristr($joinModelName, ' AS ')) {
+                        // if using AS (table alias)
+                        $joinNM = explode(' ', $joinModelName);
+
+                        $joinModelName = $joinNM[0];
+                    }
+
+                    if(isset($joinModelNS)) {
+                        $joinModelName = $joinModelNS.'\\'.$joinModelName;
+                    }
+
                     $JoinModelFQNS = 'App\Models\\'.$joinModelName;
 
                     $joinModel = new $JoinModelFQNS();
 
                     $joinTable = $joinModel->table;
 
-                    if (isset($value[3])) {
-                        $tableAlias = $value[3];
+                    if(isset($joinNM[2])) {
+                        $tableAlias = $joinNM[2];
 
                         $joinTable .= ' AS ' . $tableAlias;
                     }
-                    if(isset($joinNM[2])) {
-                        $tableAlias = $joinNM[2];
+
+                    if (isset($value[3])) {
+                        $tableAlias = $value[3];
 
                         $joinTable .= ' AS ' . $tableAlias;
                     }
@@ -467,6 +486,9 @@ class PageController extends Controller
     }
 
     private function getColumnsName($modelName) {
+        if(stristr($modelName, '/')) {
+            $modelName = str_replace('/', '\\', $modelName);
+        }
 
         // get all column name from selected model
         $modelFQNS = 'App\Models\\'.$modelName;
@@ -484,7 +506,26 @@ class PageController extends Controller
 
             foreach($this->relations as $val) {
                 $value = explode(',', $val);
-                $joinModelName = $value[0];
+
+                if(stristr($value[0], '/')) {
+                    $joinModule = explode('/', $value[0]);
+                    $joinModelNS = $joinModule[0];
+                    $joinModelName = $joinModule[1];
+                } else {
+                    $joinModelName = $value[0];
+                }
+
+                if(stristr($joinModelName, ' AS ')) {
+                    // if using AS (table alias)
+                    $joinNM = explode(' ', $joinModelName);
+
+                    $joinModelName = $joinNM[0];
+                }
+
+                if(isset($joinModelNS)) {
+                    $joinModelName = $joinModelNS.'\\'.$joinModelName;
+                }
+                
                 $JoinModelFQNS = 'App\Models\\'.$joinModelName;
 
                 $joinModel = new $JoinModelFQNS();
@@ -581,7 +622,13 @@ class PageController extends Controller
         } else {
             // get all columns name and alias if no select command
             // get all column name from selected model
-            $modelFQNS = 'App\Models\\'.$dataSource['model'];
+            if(stristr($dataSource['model'], '/')) {
+                $modelName = str_replace('/', '\\', $dataSource['model']);
+            } else {
+                $modelName = $dataSource['model'];
+            }
+
+            $modelFQNS = 'App\Models\\'.$modelName;
 
             $model = new $modelFQNS();
 
@@ -596,7 +643,26 @@ class PageController extends Controller
 
                 foreach ($this->relations as $val) {
                     $value = explode(',', $val);
-                    $joinModelName = $value[0];
+
+                    if(stristr($value[0], '/')) {
+                        $joinModule = explode('/', $value[0]);
+                        $joinModelNS = $joinModule[0];
+                        $joinModelName = $joinModule[1];
+                    } else {
+                        $joinModelName = $value[0];
+                    }
+    
+                    if(stristr($joinModelName, ' AS ')) {
+                        // if using AS (table alias)
+                        $joinNM = explode(' ', $joinModelName);
+    
+                        $joinModelName = $joinNM[0];
+                    }
+    
+                    if(isset($joinModelNS)) {
+                        $joinModelName = $joinModelNS.'\\'.$joinModelName;
+                    }
+                    
                     $JoinModelFQNS = 'App\Models\\'.$joinModelName;
 
                     $joinModel = new $JoinModelFQNS();
