@@ -8,12 +8,6 @@ For https://github.com/dandisy/webcore
 
     php artisan vendor:publish --provider="Webcore\Page\PageServiceProvider" --tag=config
 
-edit your Models/Page.php in the end of class add
-
-    public function presentations() {
-        return $this->hasMany('App\Models\Presentation');
-    }
-
 if you want front page system themes & components sample code
 
     download in https://github.com/dandisy/themes
