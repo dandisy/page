@@ -132,7 +132,7 @@ class PageController extends Controller
                     }
                 }
 
-                $data[$presentation['component_id']] = $modelData;
+                array_push($data, ['componentId' => $presentation['component_id'], 'modelData' => $modelData]);
             }
 
             // get unique columns data for datatable column filter dropdown
