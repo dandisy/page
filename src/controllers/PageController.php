@@ -7,11 +7,12 @@ use Illuminate\Http\Request;
 use App\Models\Page;
 use App\Models\MenuItem;
 use Illuminate\Support\Facades\DB;
-// additional
 use App\Repositories\DataQueryRepository;
+use Webcore\Page\ViewModel;
 
 class PageController extends Controller
 {
+    private $dataQueryRepository;
     private $relations = [];
     private $dataAliasColumn = [];
     private $dataEditColumn = [];
@@ -24,9 +25,9 @@ class PageController extends Controller
      *
      * @return void
      */
-    public function __construct()
+    public function __construct(DataQueryRepository $dataQueryRepository)
     {
-        //$this->middleware('auth');
+        $this->dataQueryRepository = $dataQueryRepository;
     }
 
     /**
@@ -34,7 +35,7 @@ class PageController extends Controller
      *
      * @return \Illuminate\Http\Response
      */
-    public function index(Request $request, DataQueryRepository $dataQueryRepository)
+    public function index(Request $request)
     {
         // start slug
         $uri = null;
@@ -58,29 +59,26 @@ class PageController extends Controller
             ->where('slug', $uri)
             ->where('status', 'publish')
             ->first();
-
-        $pageWithWidget = NULL;
+        
         if ($page) {
+            $pageWithWidget = NULL;
             $pageContent = $page->description ? \Widget::run('\Webcore\Page\Widgets\Page', ['pageContent' => $page->description]) : NULL;
-
             $pageWithWidget = $page->toArray();
-
             $pageWithWidget['description'] = $pageContent;
-
             if(!$pageWithWidget['presentations']) {
                 //return view('themes::' . $page->template)
                 return view('themes::'.str_replace('/', '.', $page->template))
                     ->with('items', ['menu' => $menu, 'page' => $pageWithWidget]);
             }
 
-            $presentations =  $this->getPresentations($pageWithWidget, $dataQueryRepository);
-            $presentations['menu'] = $menu;
-    
+            $presentations =  $this->getPresentations($page);    
             if($presentations) {
+                $presentations['menu'] = $menu;
+
                 //return view('vendor.themes.'.str_replace('/', '.', $page->template))
                 return view('themes::'.str_replace('/', '.', $page->template))
                     ->with('items', $presentations)
-                    ->with('display', $request->display)
+                    ->with('showData', $request->showData)
                     ->with('key', $request->key ? : NULL);
             }
         }
@@ -88,14 +86,14 @@ class PageController extends Controller
         abort(404);
     }
 
-    private function getPresentations($page, DataQueryRepository $dataQueryRepository, $filter = NULL) {
+    private function getPresentations($page, /*passing to getQueryData*/$filter = NULL) {
         $presentations = NULL;
 
         if($page['presentations']) {
             $model = NULL;
             $modelData = NULL;
             $data = NULL;
-            $columnsUniqueData = [];
+            //$columnsUniqueData = [];
 
             foreach($page['presentations'] as $key => $presentation) {
                 $component = $presentation['component'];
@@ -105,7 +103,7 @@ class PageController extends Controller
 
                     if($dataSource) {
                         if($dataSource['model']) {
-                            $queryData = $this->getQueryData($dataSource, $dataQueryRepository, $filter);
+                            $queryData = $this->getQueryData($dataSource, $filter);
                             $model = $queryData['model'];
 //                            if(method_exists($model, 'get')) {
                                 $modelData = $model->get();
@@ -132,35 +130,32 @@ class PageController extends Controller
                     }
                 }
 
-                array_push($data, ['componentId' => $presentation['component_id'], 'modelData' => $modelData]);
+                $data[$presentation['component_id']] = $modelData;
             }
 
-            // get unique columns data for datatable column filter dropdown
-            // note : for now only support one datatable in a page
-            foreach(array_column($this->dataAliasColumn, 'title') as $item) {
-                $columnsUniqueData[$item] = array_unique(array_column($modelData->toArray(), $item));
-            }
-
-            $dataTable = [
-                'model' => $model,
-                'columns' => $this->dataAliasColumn,
-                'editColumns' => $this->dataEditColumn,
-                'editColumnsRelation' => $this->dataEditColumnRelation,
-                'addColumns' => $this->dataAddColumn,
-                'columnsUniqueData' => $columnsUniqueData
-            ];
+            // // get unique columns data for datatable column filter dropdown
+            // // note : for now only support one datatable in a page
+            // foreach(array_column($this->dataAliasColumn, 'title') as $item) {
+            //     $columnsUniqueData[$item] = array_unique(array_column($modelData->toArray(), $item));
+            // }
 
             $presentations = [
-                'data' => collect($data),
-                'dataTable' => collect($dataTable),
-                'page' => collect($page)
+                'page' => $page,
+                'viewModel' => new ViewModel($model),
+                'dataTable' => [
+                    'columns' => $this->dataAliasColumn,
+                    'editColumns' => $this->dataEditColumn,
+                    'editColumnsRelation' => $this->dataEditColumnRelation,
+                    'addColumns' => $this->dataAddColumn,
+                    //'columnsUniqueData' => $columnsUniqueData
+                ]
             ];
         }
 
         return collect($presentations);
     }
 
-    private function getQueryData($dataSource, DataQueryRepository $dataQueryRepository, $filter = NULL) {
+    private function getQueryData($dataSource, /*not yet used*/$filter = NULL) {
         $columns = [];
         $hasSubQuery = NULL;
         $asSubQuery = NULL;
@@ -170,24 +165,20 @@ class PageController extends Controller
         } else {
             $modelName = $dataSource['model'];
         }
-
         $modelFQNS = 'App\Models\\'.$modelName;
-
         $data = new $modelFQNS();
 
         $dataQuery = $filter ? : $dataSource['data_queries'];
-
         foreach($dataQuery as $query) {
             if(array_key_exists('id', $query)) {
                 $id = $query['id'];
-                $hasSubQuery = $dataQueryRepository->findWhere(['parent' => $id]);
+                $hasSubQuery = $this->dataQueryRepository->findWhere(['parent' => $id]);
             }
             if(array_key_exists('parent', $query)) {
                 $asSubQuery = $query['parent'];
             }
 
             $command = $query['command'];
-
             if (
                 $command === 'first' ||
                 $command === 'count' ||
@@ -492,9 +483,7 @@ class PageController extends Controller
 
         // get all column name from selected model
         $modelFQNS = 'App\Models\\'.$modelName;
-
         $model = new $modelFQNS();
-
         $columns = $model->getTableColumns();
         // end get all column name from selected model
 
@@ -506,7 +495,6 @@ class PageController extends Controller
 
             foreach($this->relations as $val) {
                 $value = explode(',', $val);
-
                 if(stristr($value[0], '/')) {
                     $joinModule = explode('/', $value[0]);
                     $joinModelNS = $joinModule[0];
@@ -514,24 +502,19 @@ class PageController extends Controller
                 } else {
                     $joinModelName = $value[0];
                 }
-
                 if(stristr($joinModelName, ' AS ')) {
                     // if using AS (table alias)
                     $joinNM = explode(' ', $joinModelName);
 
                     $joinModelName = $joinNM[0];
                 }
-
                 if(isset($joinModelNS)) {
                     $joinModelName = $joinModelNS.'\\'.$joinModelName;
                 }
                 
                 $JoinModelFQNS = 'App\Models\\'.$joinModelName;
-
                 $joinModel = new $JoinModelFQNS();
-
                 $joinColumns = $joinModel->getTableColumns();
-
                 $joinColumns = array_map(function($value) use ($joinModel) {
                     return $joinModel->table.'.'.$value;
                 }, $joinColumns);
@@ -546,9 +529,10 @@ class PageController extends Controller
 
     private function getColumnsDataTable($columns, $dataSource) {
         if($columns) {
+            $dataSource = collect($dataSource);
             // collecting column alias & column edit for datatable
-            $alias = $dataSource['data _columns']->pluck('alias', 'name')->toArray();
-            $edit = $dataSource['data_columns']->pluck('edit', 'name')->toArray();
+            $alias = array_column($dataSource['data_columns'], 'alias', 'name');
+            $edit = array_column($dataSource['data_columns'], 'edit', 'name');
 
             foreach ($columns as $value) {
                 if (strpos($value, '.')) {
@@ -627,11 +611,8 @@ class PageController extends Controller
             } else {
                 $modelName = $dataSource['model'];
             }
-
             $modelFQNS = 'App\Models\\'.$modelName;
-
             $model = new $modelFQNS();
-
             $columns = $model->getTableColumns();
             // end all column name from selected model
 
@@ -643,32 +624,25 @@ class PageController extends Controller
 
                 foreach ($this->relations as $val) {
                     $value = explode(',', $val);
-
                     if(stristr($value[0], '/')) {
                         $joinModule = explode('/', $value[0]);
                         $joinModelNS = $joinModule[0];
                         $joinModelName = $joinModule[1];
                     } else {
                         $joinModelName = $value[0];
-                    }
-    
+                    }    
                     if(stristr($joinModelName, ' AS ')) {
                         // if using AS (table alias)
                         $joinNM = explode(' ', $joinModelName);
     
                         $joinModelName = $joinNM[0];
-                    }
-    
+                    }    
                     if(isset($joinModelNS)) {
                         $joinModelName = $joinModelNS.'\\'.$joinModelName;
-                    }
-                    
+                    }                    
                     $JoinModelFQNS = 'App\Models\\'.$joinModelName;
-
                     $joinModel = new $JoinModelFQNS();
-
                     $joinColumns = $joinModel->getTableColumns();
-
                     $joinColumns = array_map(function ($value) use ($joinModel) {
                         return $joinModel->table . '.' . $value;
                     }, $joinColumns);
@@ -692,7 +666,7 @@ class PageController extends Controller
     }
 
     // for handling datatable
-    public function getDataTable(Request $request, DataQueryRepository $dataQueryRepository)
+    public function getDataTable(Request $request)
     {
         $page = Page::with('presentations')
             ->with('presentations.component')
@@ -703,14 +677,12 @@ class PageController extends Controller
             ->where('status', 'publish')
             ->first();
 
-        $presentations =  $this->getPresentations($page, $dataQueryRepository);
-
+        $presentations =  $this->getPresentations($page);
         $data = $presentations['dataTable']['model'];
 
         if($request->filter) {
             foreach ($request->filter as $filter) {
                 $command = $filter['command'];
-
                 if(
                     $command === 'whereNull' ||
                     $command === 'whereNotNull' ||
@@ -735,5 +707,29 @@ class PageController extends Controller
         }
 
         return \Yajra\DataTables\Facades\DataTables::of($data)->make(true);
+    }
+
+    public function getData(Request $request) {
+        $vm = json_decode($request->vm);
+
+        return $vm->getData();
+    }
+
+    public function getUniqueDataColumn(Request $request) {
+        $vm = json_decode($request->vm);
+
+        return $vm->getUniqueDataColumn($request->column);
+    }
+
+    public function getUniqueData() {
+        $vm = json_decode($request->vm);
+
+        return $vm->getUniqueData();
+    }
+
+    public function getColumns() {
+        $vm = json_decode($request->vm);
+
+        return $vm->getColumns();
     }
 }
